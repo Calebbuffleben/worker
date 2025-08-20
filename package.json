@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "postinstall": "npm run build",
     "dev": "ts-node --transpile-only src/index.ts",
     "smoke:r2": "ts-node --transpile-only src/smoke-r2.ts"
   },
