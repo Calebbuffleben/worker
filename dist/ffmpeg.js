@@ -67,6 +67,8 @@ async function transcodeToHls(inputFile, destinationDir, options) {
                 '-sc_threshold 0',
                 `-g 48`, // GOP size (keyframe interval)
                 '-keyint_min 48',
+                '-vsync 1', // Video sync method
+                '-async 1', // Audio sync method
                 `-hls_time ${options.segmentSeconds}`,
                 '-hls_playlist_type vod',
                 '-hls_flags independent_segments',
