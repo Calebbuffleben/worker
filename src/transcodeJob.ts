@@ -15,11 +15,11 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   const crf = data.crf ?? 21;
   const preset = data.preset ?? 'veryfast';
   const ladder = data.ladder ?? [
-    { width: 1920, height: 1080, videoBitrateKbps: 6000, audioBitrateKbps: 128 }, // 1080p
+  //  { width: 1920, height: 1080, videoBitrateKbps: 6000, audioBitrateKbps: 128 }, // 1080p
     { width: 1280, height: 720, videoBitrateKbps: 3000, audioBitrateKbps: 128 },  // 720p
-    { width: 854, height: 480, videoBitrateKbps: 1500, audioBitrateKbps: 128 },   // 480p
+  //  { width: 854, height: 480, videoBitrateKbps: 1500, audioBitrateKbps: 128 },   // 480p
     { width: 640, height: 360, videoBitrateKbps: 800, audioBitrateKbps: 128 },    // 360p
-    { width: 426, height: 240, videoBitrateKbps: 400, audioBitrateKbps: 128 },    // 240p
+  //  { width: 426, height: 240, videoBitrateKbps: 400, audioBitrateKbps: 128 },    // 240p
   ];
   const hlsPath = data.hlsPath ?? 'hls';
 
