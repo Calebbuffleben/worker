@@ -101,6 +101,9 @@ export async function transcodeToHls(
           `-hls_time ${options.segmentSeconds}`,
           '-hls_playlist_type vod',
           '-hls_flags independent_segments',
+          '-hls_segment_type mpegts', // Força segmentos TS para melhor compatibilidade
+          '-hls_list_size 0', // Mantém todos os segmentos no playlist
+          '-hls_delete_segments', // Remove segmentos antigos se necessário
           `-hls_segment_filename ${path.join(destinationDir, segmentPrefix)}`,
         ])
         .output(playlistPath)
