@@ -1,10 +1,11 @@
 {
   "name": "stream-worker",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:clean": "rm -rf dist && npm run build",
     "start": "node dist/index.js",
     "postinstall": "npm run build",
     "dev": "ts-node --transpile-only src/index.ts",

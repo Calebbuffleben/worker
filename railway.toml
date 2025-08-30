@@ -1,0 +1,19 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 10
+
+[deploy.envs]
+NODE_ENV = "production"
+
+# Build configuration
+[build.envs]
+NODE_ENV = "production"
+NIXPACKS_NODE_PACKAGE_MANAGER = "npm"
+# Força rebuild sem cache
+NIXPACKS_CACHE_KEY = "worker-v2"
