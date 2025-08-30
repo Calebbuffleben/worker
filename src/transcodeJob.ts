@@ -10,7 +10,6 @@ import axios from 'axios';
 
 export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<TranscodeJobResult> {
   const data = job.data;
-
   // Ajustar segmentSeconds baseado na duração do vídeo
   let segmentSeconds = data.segmentSeconds ?? 6;
   
