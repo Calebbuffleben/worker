@@ -94,7 +94,7 @@ export async function transcodeToHls(
           ...(options.crf != null ? [`-crf ${options.crf}`] : [`-b:v ${vBitrate}`]),
           `-b:a ${aBitrate}`,
           '-sc_threshold 0',
-          `-g 48`, // GOP size (keyframe interval)
+          '-g 48', // GOP size (keyframe interval)
           '-keyint_min 48',
           '-vsync 1', // Video sync method
           '-async 1', // Audio sync method
@@ -103,7 +103,6 @@ export async function transcodeToHls(
           '-hls_flags independent_segments',
           '-hls_segment_type mpegts', // Força segmentos TS para melhor compatibilidade
           '-hls_list_size 0', // Mantém todos os segmentos no playlist
-          '-hls_delete_segments', // Remove segmentos antigos se necessário
           `-hls_segment_filename ${path.join(destinationDir, segmentPrefix)}`,
         ])
         .output(playlistPath)
