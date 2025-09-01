@@ -113,7 +113,13 @@ export async function transcodeToHls(
           logger.info({ frames: p.frames, timemark: p.timemark }, `ffmpeg progress ${variant.height}p`)
         )
         .on('error', (err: unknown) => {
-          logger.error({ err }, `ffmpeg error variant ${variant.height}p`);
+          logger.error({ 
+            err, 
+            variant: `${variant.width}x${variant.height}`,
+            inputFile,
+            outputPath: playlistPath,
+            command: command._getArguments?.() || 'unknown'
+          }, `ffmpeg error variant ${variant.height}p`);
           reject(err);
         })
         .on('end', () => {
