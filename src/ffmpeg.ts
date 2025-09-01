@@ -62,14 +62,20 @@ export async function transcodeToHls(
   await fs.mkdir(destinationDir, { recursive: true });
 
   const masterPath = path.join(destinationDir, 'master.m3u8');
-  const variantPlaylists: Array<{ 
-    width: number; 
-    height: number; 
-    bandwidth: number; 
-    playlistPath: string; 
+  const variantPlaylists: Array<{
+    width: number;
+    height: number;
+    bandwidth: number;
+    playlistPath: string;
+    codecs: string;
   }> = [];
 
   // Process each variant sequentially to avoid resource conflicts
+  // RFC 6381 codec strings for H.264 Main@L4.0 and AAC-LC
+  // Keep in sync with encoder settings below
+  const videoCodecRfc6381 = 'avc1.4d4028';
+  const audioCodecRfc6381 = 'mp4a.40.2';
+
   for (let i = 0; i < options.variants.length; i++) {
     const variant = options.variants[i];
     const playlistName = `variant_${variant.height}p.m3u8`;
@@ -93,11 +99,14 @@ export async function transcodeToHls(
           `-preset ${options.preset}`,
           ...(options.crf != null ? [`-crf ${options.crf}`] : [`-b:v ${vBitrate}`]),
           `-b:a ${aBitrate}`,
+          '-profile:v main',
+          '-level:v 4.0',
           '-sc_threshold 0',
           '-g 48', // GOP size (keyframe interval)
           '-keyint_min 48',
-          '-vsync 1', // Video sync method
-          '-async 1', // Audio sync method
+          '-ar 48000',
+          '-ac 2',
+          `-force_key_frames expr:gte(t,n_forced*${options.segmentSeconds})`,
           `-hls_time ${options.segmentSeconds}`,
           '-hls_playlist_type vod',
           '-hls_flags independent_segments',
@@ -134,6 +143,7 @@ export async function transcodeToHls(
       height: variant.height,
       bandwidth: totalBandwidth,
       playlistPath: playlistName,
+      codecs: `${videoCodecRfc6381},${audioCodecRfc6381}`,
     });
   }
 
@@ -146,11 +156,12 @@ export async function transcodeToHls(
   return { masterPath };
 }
 
-function generateMasterPlaylist(variants: Array<{ 
-  width: number; 
-  height: number; 
-  bandwidth: number; 
-  playlistPath: string; 
+function generateMasterPlaylist(variants: Array<{
+  width: number;
+  height: number;
+  bandwidth: number;
+  playlistPath: string;
+  codecs?: string;
 }>): string {
   let content = '#EXTM3U\n#EXT-X-VERSION:6\n\n';
   
@@ -158,7 +169,8 @@ function generateMasterPlaylist(variants: Array<{
   const sortedVariants = [...variants].sort((a, b) => b.bandwidth - a.bandwidth);
   
   for (const variant of sortedVariants) {
-    content += `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bandwidth},RESOLUTION=${variant.width}x${variant.height}\n`;
+    const codecsAttr = variant.codecs ? `,CODECS="${variant.codecs}"` : '';
+    content += `#EXT-X-STREAM-INF:BANDWIDTH=${variant.bandwidth},RESOLUTION=${variant.width}x${variant.height}${codecsAttr}\n`;
     content += `${variant.playlistPath}\n\n`;
   }
   
