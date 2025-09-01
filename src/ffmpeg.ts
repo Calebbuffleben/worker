@@ -51,6 +51,7 @@ export type HlsOptions = {
   preset: string; // e.g., 'veryfast'
   crf?: number; // if using CRF mode
   audioCodec?: string; // 'aac'
+  videoFps?: number; // detected fps to tune GOP/level
 };
 
 export async function transcodeToHls(
@@ -71,10 +72,8 @@ export async function transcodeToHls(
   }> = [];
 
   // Process each variant sequentially to avoid resource conflicts
-  // RFC 6381 codec strings for H.264 Main@L4.0 and AAC-LC
-  // Keep in sync with encoder settings below
-  const videoCodecRfc6381 = 'avc1.4d4028';
-  const audioCodecRfc6381 = 'mp4a.40.2';
+  const audioCodecRfc6381 = 'mp4a.40.2'; // AAC-LC
+  const fps = Math.max(1, Math.round((options.videoFps || 24)));
 
   for (let i = 0; i < options.variants.length; i++) {
     const variant = options.variants[i];
@@ -91,6 +90,13 @@ export async function transcodeToHls(
     logger.info(`Transcoding variant ${i + 1}/${options.variants.length}: ${variant.width}x${variant.height} @ ${vBitrate}`);
 
     await new Promise<void>((resolve, reject) => {
+      // Choose H.264 level based on resolution and fps
+      // 720p@<=30fps -> 4.0, 720p@>30fps -> 4.1
+      const needsHighFps = variant.height >= 720 && fps > 30;
+      const h264Level = needsHighFps ? '4.1' : '4.0';
+      const videoCodecRfc6381 = needsHighFps ? 'avc1.4d4029' : 'avc1.4d4028';
+      const gopSize = Math.max(24, Math.round(fps * options.segmentSeconds));
+
       const command = ffmpeg(inputFile)
         .videoCodec('libx264')
         .audioCodec(options.audioCodec || 'aac')
@@ -100,10 +106,17 @@ export async function transcodeToHls(
           ...(options.crf != null ? [`-crf ${options.crf}`] : [`-b:v ${vBitrate}`]),
           `-b:a ${aBitrate}`,
           '-profile:v main',
-          '-level:v 4.0',
+          `-level:v ${h264Level}`,
           '-sc_threshold 0',
-          '-g 48', // GOP size (keyframe interval)
-          '-keyint_min 48',
+          `-g ${gopSize}`,
+          `-keyint_min ${gopSize}`,
+          '-pix_fmt yuv420p',
+          '-map 0:v:0',
+          '-map 0:a:0',
+          '-sn',
+          '-dn',
+          '-map_metadata -1',
+          '-map_chapters -1',
           '-ar 48000',
           '-ac 2',
           `-force_key_frames expr:gte(t,n_forced*${options.segmentSeconds})`,
@@ -143,7 +156,7 @@ export async function transcodeToHls(
       height: variant.height,
       bandwidth: totalBandwidth,
       playlistPath: playlistName,
-      codecs: `${videoCodecRfc6381},${audioCodecRfc6381}`,
+      codecs: `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'},${audioCodecRfc6381}`,
     });
   }
 
