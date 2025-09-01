@@ -106,10 +106,15 @@ export async function transcodeToHls(
       const videoCodecRfc6381 = needsHighFps ? 'avc1.4d4029' : 'avc1.4d4028';
       const gopSize = Math.max(24, Math.round(fps * options.segmentSeconds));
 
-      const command = ffmpeg(inputFile)
+      let command = ffmpeg(inputFile)
         .videoCodec('libx264')
-        .audioCodec(options.includeAudio ? (options.audioCodec || 'aac') : undefined as any)
-        .videoFilters(`scale=${variant.width}:${variant.height}`)
+        .videoFilters(`scale=${variant.width}:${variant.height}`);
+
+      if (options.includeAudio) {
+        command = command.audioCodec(options.audioCodec || 'aac');
+      }
+
+      command
         .outputOptions((() => {
           const opts: string[] = [];
           opts.push(`-preset ${options.preset}`);
