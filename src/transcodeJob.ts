@@ -42,7 +42,10 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
     logger.info({ info }, 'ffprobe info');
 
     // Ajustar segmentSeconds baseado na duração real do vídeo
-    if (info.durationSeconds && info.durationSeconds > 600) { // > 10 minutos
+    if (info.durationSeconds && info.durationSeconds > 1800) { // > 30 minutos
+      segmentSeconds = 2;
+      logger.info(`Video duration: ${info.durationSeconds}s, using ${segmentSeconds}s segments for very long video`);
+    } else if (info.durationSeconds && info.durationSeconds > 600) { // > 10 minutos
       segmentSeconds = 4;
       logger.info(`Video duration: ${info.durationSeconds}s, using ${segmentSeconds}s segments`);
     }
