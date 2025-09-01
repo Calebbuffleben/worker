@@ -64,6 +64,8 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       crf,
       audioCodec: 'aac',
       videoFps: info.fps,
+      includeAudio: info.hasAudio === true,
+      audioChannels: info.audioChannels ?? 2,
     });
 
     // 4) Upload HLS outputs to R2 under assetKey/hls

@@ -14,6 +14,9 @@ export type ProbeInfo = {
   width?: number;
   height?: number;
   fps?: number;
+  hasAudio?: boolean;
+  audioChannels?: number;
+  audioSampleRate?: number;
 };
 
 export async function probe(filePath: string): Promise<ProbeInfo> {
@@ -21,18 +24,22 @@ export async function probe(filePath: string): Promise<ProbeInfo> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (ffmpeg as any).ffprobe(filePath, (err: unknown, data: any) => {
       if (err) return reject(err);
-      const stream = data.streams?.find((s: any) => s.codec_type === 'video');
-      const rFrameRate = stream?.r_frame_rate && stream.r_frame_rate.includes('/')
+      const vStream = data.streams?.find((s: any) => s.codec_type === 'video');
+      const aStream = data.streams?.find((s: any) => s.codec_type === 'audio');
+      const rFrameRate = vStream?.r_frame_rate && vStream.r_frame_rate.includes('/')
         ? (() => {
-            const [num, den] = stream!.r_frame_rate.split('/').map(Number);
+            const [num, den] = vStream!.r_frame_rate.split('/').map(Number);
             return den ? num / den : undefined;
           })()
         : undefined;
       resolve({
         durationSeconds: Number(data.format?.duration || 0),
-        width: stream?.width,
-        height: stream?.height,
+        width: vStream?.width,
+        height: vStream?.height,
         fps: rFrameRate,
+        hasAudio: Boolean(aStream),
+        audioChannels: aStream?.channels,
+        audioSampleRate: aStream?.sample_rate ? Number(aStream.sample_rate) : undefined,
       });
     });
   });
@@ -52,6 +59,8 @@ export type HlsOptions = {
   crf?: number; // if using CRF mode
   audioCodec?: string; // 'aac'
   videoFps?: number; // detected fps to tune GOP/level
+  includeAudio?: boolean; // whether input has audio
+  audioChannels?: number; // channels to encode when includeAudio
 };
 
 export async function transcodeToHls(
@@ -99,34 +108,46 @@ export async function transcodeToHls(
 
       const command = ffmpeg(inputFile)
         .videoCodec('libx264')
-        .audioCodec(options.audioCodec || 'aac')
+        .audioCodec(options.includeAudio ? (options.audioCodec || 'aac') : undefined as any)
         .videoFilters(`scale=${variant.width}:${variant.height}`)
-        .outputOptions([
-          `-preset ${options.preset}`,
-          ...(options.crf != null ? [`-crf ${options.crf}`] : [`-b:v ${vBitrate}`]),
-          `-b:a ${aBitrate}`,
-          '-profile:v main',
-          `-level:v ${h264Level}`,
-          '-sc_threshold 0',
-          `-g ${gopSize}`,
-          `-keyint_min ${gopSize}`,
-          '-pix_fmt yuv420p',
-          '-map 0:v:0',
-          '-map 0:a:0',
-          '-sn',
-          '-dn',
-          '-map_metadata -1',
-          '-map_chapters -1',
-          '-ar 48000',
-          '-ac 2',
-          `-force_key_frames expr:gte(t,n_forced*${options.segmentSeconds})`,
-          `-hls_time ${options.segmentSeconds}`,
-          '-hls_playlist_type vod',
-          '-hls_flags independent_segments',
-          '-hls_segment_type mpegts', // Força segmentos TS para melhor compatibilidade
-          '-hls_list_size 0', // Mantém todos os segmentos no playlist
-          `-hls_segment_filename ${path.join(destinationDir, segmentPrefix)}`,
-        ])
+        .outputOptions((() => {
+          const opts: string[] = [];
+          opts.push(`-preset ${options.preset}`);
+          if (options.crf != null) {
+            opts.push(`-crf ${options.crf}`);
+          } else {
+            opts.push(`-b:v ${vBitrate}`);
+          }
+          opts.push('-profile:v main');
+          opts.push(`-level:v ${h264Level}`);
+          opts.push('-sc_threshold 0');
+          opts.push(`-g ${gopSize}`);
+          opts.push(`-keyint_min ${gopSize}`);
+          opts.push('-pix_fmt yuv420p');
+          // Stream mapping
+          opts.push('-map 0:v:0');
+          if (options.includeAudio) {
+            opts.push('-map 0:a:0?');
+            opts.push(`-b:a ${aBitrate}`);
+            opts.push('-ar 48000');
+            opts.push(`-ac ${Math.max(1, Math.min(2, options.audioChannels || 2))}`);
+          } else {
+            opts.push('-an');
+          }
+          opts.push('-sn');
+          opts.push('-dn');
+          opts.push('-map_metadata -1');
+          opts.push('-map_chapters -1');
+          opts.push(`-force_key_frames expr:gte(t,n_forced*${options.segmentSeconds})`);
+          // HLS options
+          opts.push(`-hls_time ${options.segmentSeconds}`);
+          opts.push('-hls_playlist_type vod');
+          opts.push('-hls_flags independent_segments');
+          opts.push('-hls_segment_type mpegts');
+          opts.push('-hls_list_size 0');
+          opts.push(`-hls_segment_filename ${path.join(destinationDir, segmentPrefix)}`);
+          return opts;
+        })())
         .output(playlistPath)
         .format('hls')
         .on('start', (cmd: string) => logger.info({ cmd }, `ffmpeg start variant ${variant.height}p`))
@@ -156,7 +177,9 @@ export async function transcodeToHls(
       height: variant.height,
       bandwidth: totalBandwidth,
       playlistPath: playlistName,
-      codecs: `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'},${audioCodecRfc6381}`,
+      codecs: options.includeAudio
+        ? `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'},${audioCodecRfc6381}`
+        : `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'}`,
     });
   }
 
