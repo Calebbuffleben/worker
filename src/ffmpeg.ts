@@ -227,11 +227,23 @@ export async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T
   }
 }
 
-export async function extractThumbnail(inputFile: string, outputFile: string, seekSeconds: number = 1): Promise<void> {
+export async function extractThumbnail(
+  inputFile: string,
+  outputFile: string,
+  seekSeconds: number = 1,
+  maxWidth?: number,
+): Promise<void> {
   await new Promise<void>((resolve, reject) => {
-    const command = ffmpeg(inputFile)
+    let command = ffmpeg(inputFile)
       .seekInput(Math.max(0, seekSeconds))
-      .frames(1)
+      .frames(1);
+
+    if (typeof maxWidth === 'number' && maxWidth > 0) {
+      // Mantém proporção
+      command = command.size(`${Math.round(maxWidth)}x?`);
+    }
+
+    command
       .outputOptions(['-qscale:v 2'])
       .output(outputFile)
       .on('start', (cmd: string) => logger.info({ cmd }, 'ffmpeg thumbnail start'))
@@ -239,8 +251,8 @@ export async function extractThumbnail(inputFile: string, outputFile: string, se
         logger.error({ err }, 'ffmpeg thumbnail error');
         reject(err);
       })
-      .on('end', () => resolve());
-    command.run();
+      .on('end', () => resolve())
+      .run();
   });
 }
 
@@ -265,7 +277,9 @@ export async function generateThumbnailSprites(
   
   const totalThumbnails = Math.floor(durationSeconds / intervalSeconds);
   const thumbnailsPerSprite = spriteColumns * spriteRows;
-  const numberOfSprites = Math.ceil(totalThumbnails / thumbnailsPerSprite);
+  // Cap a apenas 1 sprite por vídeo
+  const numberOfSpritesRaw = Math.ceil(Math.max(1, totalThumbnails) / thumbnailsPerSprite);
+  const numberOfSprites = Math.min(1, numberOfSpritesRaw);
   
   logger.info(`Generating ${totalThumbnails} thumbnails in ${numberOfSprites} sprite(s)`);
   

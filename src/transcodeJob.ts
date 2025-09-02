@@ -75,44 +75,17 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
     const hlsMasterRelative = path.relative(tmp, masterPath).replace(/\\/g, '/');
     const hlsMasterPath = hlsMasterRelative; // Just the relative path: hls/master.m3u8
 
-    // 5) Advanced thumbnails: Generate sprites and VTT
+    // 5) Thumbnail única para capa
     const thumbsDir = path.join(tmp, 'thumbs');
     await fs.mkdir(thumbsDir, { recursive: true });
-    
     try {
-      // Generate main thumbnail (first frame)
       const mainThumbPath = path.join(thumbsDir, '0001.jpg');
-      await extractThumbnail(inputPath, mainThumbPath, Math.min(1, Math.max(0, Math.floor((info.durationSeconds || 1)/10))));
+      const midSecond = Math.max(1, Math.floor((info.durationSeconds || 2) / 2));
+      await extractThumbnail(inputPath, mainThumbPath, midSecond, 1280);
       const thumbBuf = await fs.readFile(mainThumbPath);
       await putObject(`${data.assetKey}/thumbs/0001.jpg`, thumbBuf, 'image/jpeg');
-
-      // Generate thumbnail sprites for scrubbing
-      if (info.durationSeconds > 10) { // Only for videos longer than 10 seconds
-        const { spriteFiles, vttFile } = await generateThumbnailSprites(inputPath, thumbsDir, {
-          durationSeconds: info.durationSeconds,
-          intervalSeconds: Math.max(2, Math.floor(info.durationSeconds / 50)), // ~50 thumbnails max
-          spriteColumns: 10,
-          spriteRows: 10,
-          thumbnailWidth: 160,
-          thumbnailHeight: 90,
-        });
-
-        // Upload sprites and VTT
-        for (const spriteFile of spriteFiles) {
-          const spritePath = path.join(thumbsDir, spriteFile);
-          const spriteBuffer = await fs.readFile(spritePath);
-          await putObject(`${data.assetKey}/thumbs/${spriteFile}`, spriteBuffer, 'image/jpeg');
-        }
-
-        // Upload VTT file
-        const vttPath = path.join(thumbsDir, vttFile);
-        const vttBuffer = await fs.readFile(vttPath);
-        await putObject(`${data.assetKey}/thumbs/${vttFile}`, vttBuffer, 'text/vtt');
-        
-        logger.info(`Uploaded ${spriteFiles.length} sprite files and VTT`);
-      }
     } catch (thumbError) {
-      logger.warn({ thumbError }, 'Failed to generate thumbnails, continuing...');
+      logger.warn({ thumbError }, 'Failed to generate thumbnail, continuing...');
     }
 
     const result: TranscodeJobResult = {
