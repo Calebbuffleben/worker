@@ -117,6 +117,13 @@ export async function transcodeToHls(
       command
         .outputOptions((() => {
           const opts: string[] = [];
+          // Performance and stability
+          opts.push('-threads 0');
+          opts.push('-filter_threads 0');
+          opts.push('-sws_flags fast_bilinear');
+          opts.push('-max_muxing_queue_size 1024');
+          
+          // Encoding
           opts.push(`-preset ${options.preset}`);
           if (options.crf != null) {
             opts.push(`-crf ${options.crf}`);

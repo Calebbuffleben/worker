@@ -16,7 +16,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   let segmentSeconds = data.segmentSeconds ?? 6;
   
   const crf = data.crf ?? 21;
-  const preset = data.preset ?? 'veryfast';
+  const preset = data.preset ?? 'superfast';
   const ladder = data.ladder ?? [
   //  { width: 1920, height: 1080, videoBitrateKbps: 6000, audioBitrateKbps: 128 }, // 1080p
     { width: 1280, height: 720, videoBitrateKbps: 3000, audioBitrateKbps: 128 },  // 720p
