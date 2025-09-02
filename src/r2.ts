@@ -1,4 +1,4 @@
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, CompletedPart, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, ListBucketsCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command, CompletedPart, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand, ListBucketsCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { env } from './env';
 
 export const s3 = new S3Client({
@@ -57,6 +57,13 @@ export async function multipartUpload(key: string, parts: Array<{ Body: Buffer |
     Key: key,
     UploadId: create.UploadId!,
     MultipartUpload: { Parts: uploadedParts },
+  }));
+}
+
+export async function removeObject(key: string) {
+  await s3.send(new DeleteObjectCommand({
+    Bucket: env.R2_BUCKET,
+    Key: key,
   }));
 }
 

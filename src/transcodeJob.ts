@@ -3,7 +3,7 @@ import path from 'node:path';
 import { Job } from 'bullmq';
 import { logger } from './logger';
 import { TranscodeJobData, TranscodeJobResult } from './types';
-import { getObjectStream, putObject } from './r2';
+import { getObjectStream, putObject, removeObject } from './r2';
 import { probe, transcodeToHls, withTempDir, extractThumbnail, generateThumbnailSprites } from './ffmpeg';
 import mime from 'mime';
 import axios from 'axios';
@@ -98,30 +98,79 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // Callback to backend if configured
     if (process.env.BACKEND_API_URL) {
-      try {
-        // Normalize base so it contains exactly one "/api"
-        const base = process.env.BACKEND_API_URL
-          .replace(/\/$/, '')
-          .replace(/\/api\/api$/, '/api')
-          .replace(/([^/])$/, '$1');
-        const ensuredApi = base.endsWith('/api') ? base : `${base}/api`;
-        const url = `${ensuredApi.replace(/\/$/, '')}/videos/transcode/callback`;
-        await axios.post(url, {
-          videoId: result.videoId,
-          organizationId: result.organizationId,
-          assetKey: result.assetKey,
-          // Ensure we send only relative path like "hls/master.m3u8"
-          hlsMasterPath: typeof result.hlsMasterPath === 'string' && result.hlsMasterPath.includes('/hls/')
-            ? result.hlsMasterPath.substring(result.hlsMasterPath.indexOf('hls/'))
-            : result.hlsMasterPath,
-          durationSeconds: Math.round(result.durationSeconds || 0),
-        }, {
-          headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
-          timeout: 30000,
-        });
-        logger.info({ videoId: result.videoId }, 'Callback to backend succeeded');
-      } catch (cbErr) {
-        logger.error({ err: cbErr }, 'Callback to backend failed');
+      const maxCallbackRetries = 5;
+      let callbackSuccess = false;
+      
+      // Normalize base so it contains exactly one "/api" - moved outside loop for rollback use
+      const base = process.env.BACKEND_API_URL
+        .replace(/\/$/, '')
+        .replace(/\/api\/api$/, '/api')
+        .replace(/([^/])$/, '$1');
+      const ensuredApi = base.endsWith('/api') ? base : `${base}/api`;
+      
+      for (let attempt = 1; attempt <= maxCallbackRetries && !callbackSuccess; attempt++) {
+        try {
+          const url = `${ensuredApi.replace(/\/$/, '')}/videos/transcode/callback`;
+          
+          await axios.post(url, {
+            videoId: result.videoId,
+            organizationId: result.organizationId,
+            assetKey: result.assetKey,
+            // Ensure we send only relative path like "hls/master.m3u8"
+            hlsMasterPath: typeof result.hlsMasterPath === 'string' && result.hlsMasterPath.includes('/hls/')
+              ? result.hlsMasterPath.substring(result.hlsMasterPath.indexOf('hls/'))
+              : result.hlsMasterPath,
+            durationSeconds: Math.round(result.durationSeconds || 0),
+          }, {
+            headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
+            timeout: 30000,
+          });
+          
+          logger.info({ videoId: result.videoId, attempt }, 'Callback to backend succeeded');
+          callbackSuccess = true;
+        } catch (cbErr) {
+          if (attempt === maxCallbackRetries) {
+            logger.error({ err: cbErr, attempt, videoId: result.videoId }, 'Callback to backend failed after all retries');
+            
+            // ROLLBACK COMPLETO: Remover vídeo do R2 e notificar falha
+            try {
+              logger.warn({ videoId: result.videoId }, 'Starting complete rollback - removing video from R2');
+              
+              // Remover HLS files
+              await removeObject(`${data.assetKey}/hls/master.m3u8`);
+              await removeObject(`${data.assetKey}/hls/segment_720p_000.ts`);
+              await removeObject(`${data.assetKey}/hls/segment_720p_001.ts`);
+              // ... outros segmentos serão removidos pelo backend
+              
+              // Remover thumbnail
+              await removeObject(`${data.assetKey}/thumbs/0001.jpg`);
+              
+              // Notificar backend sobre falha
+              const failureUrl = `${ensuredApi.replace(/\/$/, '')}/videos/transcode/failure`;
+              await axios.post(failureUrl, {
+                videoId: result.videoId,
+                organizationId: result.organizationId,
+                assetKey: data.assetKey,
+                error: 'Callback failed after 5 attempts - video removed from R2',
+                timestamp: new Date().toISOString(),
+              }, {
+                headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
+                timeout: 30000,
+              });
+              
+              logger.info({ videoId: result.videoId }, 'Rollback completed - failure notified to backend');
+            } catch (rollbackErr) {
+              logger.error({ err: rollbackErr, videoId: result.videoId }, 'Rollback failed - manual intervention required');
+            }
+            
+            // FALHAR O JOB para triggerar retry automático do BullMQ
+            throw new Error(`Callback failed after ${maxCallbackRetries} attempts - video rolled back from R2`);
+          } else {
+            logger.warn({ err: cbErr, attempt, videoId: result.videoId }, `Callback to backend failed, retrying... (${attempt}/${maxCallbackRetries})`);
+            // Wait before retry (exponential backoff: 2s, 4s, 8s, 16s, 32s)
+            await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt - 1)));
+          }
+        }
       }
     } else {
       logger.warn('BACKEND_API_URL not set; skipping callback');
