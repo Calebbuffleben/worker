@@ -10,6 +10,8 @@ import axios from 'axios';
 
 export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<TranscodeJobResult> {
   const data = job.data;
+  const startTime = Date.now();
+  
   // Ajustar segmentSeconds baseado na duração do vídeo
   let segmentSeconds = data.segmentSeconds ?? 6;
   
@@ -26,6 +28,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
   return withTempDir(async (tmp) => {
     // 1) Download original to temp file
+    const downloadStart = Date.now();
     const inputPath = path.join(tmp, 'input');
     const srcKey = data.sourcePath; // absolute key in R2
     const readStream = await getObjectStream(srcKey);
@@ -36,6 +39,20 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       write.on('error', reject);
       write.on('finish', () => resolve());
     });
+    const downloadEnd = Date.now();
+    const downloadDuration = downloadEnd - downloadStart;
+    
+    // Get file size for metrics
+    const inputStats = await fs.stat(inputPath);
+    const inputSizeMB = inputStats.size / (1024 * 1024);
+    const downloadThroughput = inputSizeMB / (downloadDuration / 1000);
+    
+    logger.info({ 
+      phase: 'download', 
+      duration: downloadDuration, 
+      sizeMB: inputSizeMB.toFixed(2),
+      throughput: downloadThroughput.toFixed(2)
+    }, 'Download completed');
 
     // 2) Probe
     const info = await probe(inputPath);
@@ -51,6 +68,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
     }
 
     // 3) Transcode to HLS (MVP: single variant)
+    const transcodeStart = Date.now();
     const outDir = path.join(tmp, hlsPath);
     const { masterPath } = await transcodeToHls(inputPath, outDir, {
       variants: ladder.map(x => ({
@@ -67,10 +85,36 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       includeAudio: info.hasAudio === true,
       audioChannels: info.audioChannels ?? 2,
     });
+    const transcodeEnd = Date.now();
+    const transcodeDuration = transcodeEnd - transcodeStart;
+    
+    logger.info({ 
+      phase: 'transcode', 
+      duration: transcodeDuration,
+      variants: ladder.length,
+      segmentSeconds,
+      preset,
+      crf
+    }, 'Transcode completed');
 
     // 4) Upload HLS outputs to R2 under assetKey/hls
+    const uploadStart = Date.now();
     const relativeDir = path.relative(tmp, outDir);
-    await uploadDirectory(outDir, `${data.assetKey}/${relativeDir}`);
+    const uploadResult = await uploadDirectory(outDir, `${data.assetKey}/${relativeDir}`);
+    const uploadEnd = Date.now();
+    const uploadDuration = uploadEnd - uploadStart;
+    
+    // Calculate upload throughput
+    const uploadSizeMB = uploadResult.totalBytes / (1024 * 1024);
+    const uploadThroughput = uploadSizeMB / (uploadDuration / 1000);
+    
+    logger.info({ 
+      phase: 'upload', 
+      duration: uploadDuration,
+      sizeMB: uploadSizeMB.toFixed(2),
+      throughput: uploadThroughput.toFixed(2),
+      files: uploadResult.fileCount
+    }, 'Upload completed');
 
     const hlsMasterRelative = path.relative(tmp, masterPath).replace(/\\/g, '/');
     const hlsMasterPath = hlsMasterRelative; // Just the relative path: hls/master.m3u8
@@ -176,23 +220,48 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       logger.warn('BACKEND_API_URL not set; skipping callback');
     }
 
+    // Final performance summary
+    const totalDuration = Date.now() - startTime;
+    const totalSizeMB = (inputSizeMB + uploadSizeMB).toFixed(2);
+    const totalThroughput = (parseFloat(totalSizeMB) / (totalDuration / 1000)).toFixed(2);
+    
+    logger.info({
+      phase: 'summary',
+      videoId: data.videoId,
+      totalDuration,
+      totalSizeMB,
+      totalThroughput,
+      breakdown: {
+        download: { duration: downloadDuration, sizeMB: inputSizeMB.toFixed(2), throughput: downloadThroughput.toFixed(2) },
+        transcode: { duration: transcodeDuration },
+        upload: { duration: uploadDuration, sizeMB: uploadSizeMB.toFixed(2), throughput: uploadThroughput.toFixed(2) }
+      }
+    }, 'Job completed - Performance summary');
+
     return result;
   });
 }
 
 async function uploadDirectory(localDir: string, destPrefix: string) {
   const entries = await fs.readdir(localDir, { withFileTypes: true });
+  let totalBytes = 0;
+  let fileCount = 0;
   for (const e of entries) {
     const full = path.join(localDir, e.name);
     const key = `${destPrefix}/${e.name}`.replace(/\\/g, '/');
     if (e.isDirectory()) {
-      await uploadDirectory(full, key);
+      const subResult = await uploadDirectory(full, key);
+      totalBytes += subResult.totalBytes;
+      fileCount += subResult.fileCount;
     } else {
       const buf = await fs.readFile(full);
+      totalBytes += buf.length;
+      fileCount++;
       const contentType = mime.getType(e.name) || undefined;
       await putObject(key, buf, contentType);
     }
   }
+  return { totalBytes, fileCount };
 }
 
 
