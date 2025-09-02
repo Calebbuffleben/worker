@@ -242,25 +242,60 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   });
 }
 
-async function uploadDirectory(localDir: string, destPrefix: string) {
+async function uploadDirectory(localDir: string, destPrefix: string): Promise<{ totalBytes: number; fileCount: number }> {
   const entries = await fs.readdir(localDir, { withFileTypes: true });
+
   let totalBytes = 0;
   let fileCount = 0;
+
+  // Split into directories and files to preserve structure
+  const directories: Array<{ full: string; key: string }> = [];
+  const files: Array<{ full: string; key: string; name: string }> = [];
+
   for (const e of entries) {
     const full = path.join(localDir, e.name);
     const key = `${destPrefix}/${e.name}`.replace(/\\/g, '/');
     if (e.isDirectory()) {
-      const subResult = await uploadDirectory(full, key);
-      totalBytes += subResult.totalBytes;
-      fileCount += subResult.fileCount;
+      directories.push({ full, key });
     } else {
-      const buf = await fs.readFile(full);
-      totalBytes += buf.length;
-      fileCount++;
-      const contentType = mime.getType(e.name) || undefined;
-      await putObject(key, buf, contentType);
+      files.push({ full, key, name: e.name });
     }
   }
+
+  // Recurse into subdirectories first (sequential) to ensure hierarchy exists
+  for (const dir of directories) {
+    const sub = await uploadDirectory(dir.full, dir.key);
+    totalBytes += sub.totalBytes;
+    fileCount += sub.fileCount;
+  }
+
+  // Upload files with limited concurrency
+  const maxConcurrent = Math.max(1, Math.min(64, parseInt(process.env.MAX_CONCURRENT_UPLOADS || '12', 10)));
+  let nextIndex = 0;
+
+  const uploadWorker = async () => {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const current = nextIndex++;
+      if (current >= files.length) break;
+
+      const f = files[current];
+      const buf = await fs.readFile(f.full);
+      const contentType = mime.getType(f.name) || undefined;
+      await putObject(f.key, buf, contentType);
+
+      totalBytes += buf.length;
+      fileCount += 1;
+    }
+  };
+
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(maxConcurrent, files.length);
+  for (let i = 0; i < workerCount; i++) workers.push(uploadWorker());
+  if (workers.length > 0) {
+    await Promise.all(workers);
+  }
+
   return { totalBytes, fileCount };
 }
 
