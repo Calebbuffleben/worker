@@ -174,11 +174,22 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
           callbackSuccess = true;
         } catch (cbErr) {
           if (attempt === maxCallbackRetries) {
-            logger.error({ err: cbErr, attempt, videoId: result.videoId }, 'Callback to backend failed after all retries');
+            logger.error({ 
+              err: cbErr, 
+              attempt, 
+              videoId: result.videoId, 
+              jobId: job.id,
+              maxRetries: maxCallbackRetries,
+              errorDetails: cbErr instanceof Error ? cbErr.message : String(cbErr)
+            }, 'Callback to backend failed after all retries - starting rollback');
             
             // ROLLBACK COMPLETO: Remover vídeo do R2 e notificar falha
             try {
-              logger.warn({ videoId: result.videoId }, 'Starting complete rollback - removing video from R2');
+              logger.warn({ 
+                videoId: result.videoId, 
+                jobId: job.id,
+                assetKey: data.assetKey 
+              }, 'Starting complete rollback - removing video from R2');
               
               // Remover HLS files
               await removeObject(`${data.assetKey}/hls/master.m3u8`);
@@ -195,24 +206,46 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
                 videoId: result.videoId,
                 organizationId: result.organizationId,
                 assetKey: data.assetKey,
-                error: 'Callback failed after 5 attempts - video removed from R2',
+                error: `Callback failed after ${maxCallbackRetries} attempts - video removed from R2. Job ID: ${job.id}`,
                 timestamp: new Date().toISOString(),
+                jobId: job.id, // Incluir jobId para rastreabilidade
               }, {
                 headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
                 timeout: 120000, // Increased from 30s to 120s (2 minutes)
               });
               
-              logger.info({ videoId: result.videoId }, 'Rollback completed - failure notified to backend');
+              logger.info({ 
+                videoId: result.videoId, 
+                jobId: job.id,
+                assetKey: data.assetKey,
+                rollbackCompleted: true
+              }, 'Rollback completed - failure notified to backend');
             } catch (rollbackErr) {
-              logger.error({ err: rollbackErr, videoId: result.videoId }, 'Rollback failed - manual intervention required');
+              logger.error({ 
+                err: rollbackErr, 
+                videoId: result.videoId, 
+                jobId: job.id,
+                assetKey: data.assetKey,
+                rollbackFailed: true
+              }, 'Rollback failed - manual intervention required');
             }
             
             // FALHAR O JOB para triggerar retry automático do BullMQ
             throw new Error(`Callback failed after ${maxCallbackRetries} attempts - video rolled back from R2`);
           } else {
-            logger.warn({ err: cbErr, attempt, videoId: result.videoId }, `Callback to backend failed, retrying... (${attempt}/${maxCallbackRetries})`);
+            const retryDelay = 2000 * Math.pow(2, attempt - 1);
+            logger.warn({ 
+              err: cbErr, 
+              attempt, 
+              videoId: result.videoId, 
+              jobId: job.id,
+              maxRetries: maxCallbackRetries,
+              retryDelay,
+              nextRetryIn: `${retryDelay}ms`
+            }, `Callback to backend failed, retrying... (${attempt}/${maxCallbackRetries})`);
+            
             // Wait before retry (exponential backoff: 2s, 4s, 8s, 16s, 32s)
-            await new Promise(resolve => setTimeout(resolve, 2000 * Math.pow(2, attempt - 1)));
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
           }
         }
       }
