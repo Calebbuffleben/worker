@@ -11,13 +11,16 @@ export const queue = new Queue<TranscodeJobData>(env.QUEUE_NAME, { connection })
 export const queueEvents = new QueueEvents(env.QUEUE_NAME, { connection });
 
 export function startWorker() {
+  const concurrency = Math.max(1, Number(process.env.WORKER_CONCURRENCY || '1'));
+  logger.info({ concurrency, pid: process.pid }, 'Initializing BullMQ worker');
+
   const worker = new Worker<TranscodeJobData, TranscodeJobResult>(
     env.QUEUE_NAME,
     async (job: Job<TranscodeJobData>) => {
       logger.info({ jobId: job.id, data: job.data }, 'Worker received job');
       return handleTranscodeJob(job);
     },
-    { connection, concurrency: Number(process.env.WORKER_CONCURRENCY || 1) }
+    { connection, concurrency }
   );
 
   worker.on('completed', (job, result) => {
@@ -25,6 +28,9 @@ export function startWorker() {
   });
   worker.on('failed', (job, err) => {
     logger.error({ jobId: job?.id, err }, 'Job failed');
+  });
+  worker.on('error', (err) => {
+    logger.error({ err }, 'Worker error');
   });
 
   queueEvents.on('waiting', ({ jobId }) => logger.info({ jobId }, 'Job waiting'));

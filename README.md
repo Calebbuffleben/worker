@@ -39,10 +39,28 @@ Consumer that processes video jobs from Redis, generates HLS and a thumbnail, up
 - R2_ENDPOINT, R2_BUCKET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY
 - BACKEND_API_URL, BACKEND_API_TOKEN (optional)
 
+### Phase 1 (scalability) env vars
+- WORKER_CLUSTER=true            # enable Node cluster mode
+- WORKER_COUNT=8                 # processes to fork (defaults to CPU cores)
+- WORKER_CONCURRENCY=2           # concurrent jobs per process
+- MAX_CONCURRENT_UPLOADS=12      # per-job parallel uploads to R2 (1-64)
+- LOG_LEVEL=info                 # pino log level
+
 ## Run
 - In worker/:
   - npm install
   - npm run dev (or npm run build && npm start)
+
+### Examples
+Run single process, single job at a time:
+```
+WORKER_CLUSTER=false WORKER_CONCURRENCY=1 npm start
+```
+
+Run cluster across all cores, 2 jobs per process:
+```
+WORKER_CLUSTER=true WORKER_CONCURRENCY=2 npm start
+```
 
 ## E2E test
 1) Start backend + set envs (Redis, R2)
