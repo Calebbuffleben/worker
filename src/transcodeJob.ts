@@ -167,7 +167,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
             durationSeconds: Math.round(result.durationSeconds || 0),
           }, {
             headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
-            timeout: 30000,
+            timeout: 120000, // Increased from 30s to 120s (2 minutes)
           });
           
           logger.info({ videoId: result.videoId, attempt }, 'Callback to backend succeeded');
@@ -199,7 +199,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
                 timestamp: new Date().toISOString(),
               }, {
                 headers: process.env.BACKEND_API_TOKEN ? { Authorization: `Bearer ${process.env.BACKEND_API_TOKEN}` } : undefined,
-                timeout: 30000,
+                timeout: 120000, // Increased from 30s to 120s (2 minutes)
               });
               
               logger.info({ videoId: result.videoId }, 'Rollback completed - failure notified to backend');
