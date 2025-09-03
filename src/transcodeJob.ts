@@ -142,7 +142,7 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // Callback to backend if configured
     if (process.env.BACKEND_API_URL) {
-      const maxCallbackRetries = 5;
+      const maxCallbackRetries = 10;
       let callbackSuccess = false;
       
       // Normalize base so it contains exactly one "/api" - moved outside loop for rollback use
