@@ -8,13 +8,17 @@ import { probe, transcodeToHls, withTempDir, extractThumbnail, generateThumbnail
 import mime from 'mime';
 import axios from 'axios';
 
+// Função que trata o job de transcodificação
 export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<TranscodeJobResult> {
+  // Obter os dados do job
   const data = job.data;
+  // Obter o tempo de início do job
   const startTime = Date.now();
   
   // Ajustar segmentSeconds baseado na duração do vídeo
   let segmentSeconds = data.segmentSeconds ?? 6;
   
+  // Obter os valores dos parâmetros de transcodificação
   const crf = data.crf ?? 21;
   const preset = data.preset ?? 'superfast';
   const ladder = data.ladder ?? [
@@ -26,25 +30,37 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   ];
   const hlsPath = data.hlsPath ?? 'hls';
 
+  // Retornar uma promise que resolve com o resultado do job
   return withTempDir(async (tmp) => {
     // 1) Download original to temp file
+
+    // Iniciar o download do original
     const downloadStart = Date.now();
+    // Criar o caminho do arquivo de entrada
     const inputPath = path.join(tmp, 'input');
+    // Obter o caminho do arquivo de entrada
     const srcKey = data.sourcePath; // absolute key in R2
+    // Obter o stream do arquivo de entrada
     const readStream = await getObjectStream(srcKey);
+    // Criar o stream de escrita
     const write = (await import('node:fs')).createWriteStream(inputPath);
+    // Aguardar o download do original
     await new Promise<void>((resolve, reject) => {
       readStream.pipe(write);
       readStream.on('error', reject);
       write.on('error', reject);
       write.on('finish', () => resolve());
     });
+    // Obter o tempo de fim do download
     const downloadEnd = Date.now();
+    // Obter o tempo de duração do download
     const downloadDuration = downloadEnd - downloadStart;
     
-    // Get file size for metrics
+    // Obter o tamanho do arquivo de entrada
     const inputStats = await fs.stat(inputPath);
+    // Obter o tamanho do arquivo de entrada em MB
     const inputSizeMB = inputStats.size / (1024 * 1024);
+    // Obter a taxa de download
     const downloadThroughput = inputSizeMB / (downloadDuration / 1000);
     
     logger.info({ 
@@ -54,7 +70,10 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       throughput: downloadThroughput.toFixed(2)
     }, 'Download completed');
 
-    // 2) Probe
+    // 2)
+    // Probe é uma função que usa o ffmpeg para obter informações sobre o vídeo
+    // Ela retorna um objeto com as informações do vídeo
+    // Essas informações são usadas para ajustar os parâmetros de transcodificação
     const info = await probe(inputPath);
     logger.info({ info }, 'ffprobe info');
 
@@ -69,9 +88,11 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // 3) Transcode to HLS (MVP: single variant)
     const transcodeStart = Date.now();
+    // Criar o caminho do diretório de saída
     const outDir = path.join(tmp, hlsPath);
     const { masterPath } = await transcodeToHls(inputPath, outDir, {
       variants: ladder.map(x => ({
+        // Criar o objeto com as informações da variante
         width: x.width,
         height: x.height,
         videoBitrateKbps: x.videoBitrateKbps,
@@ -85,9 +106,12 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
       includeAudio: info.hasAudio === true,
       audioChannels: info.audioChannels ?? 2,
     });
+    // Obter o tempo de fim da transcodificação
     const transcodeEnd = Date.now();
+    // Obter o tempo de duração da transcodificação
     const transcodeDuration = transcodeEnd - transcodeStart;
     
+    // Logar o resultado da transcodificação
     logger.info({ 
       phase: 'transcode', 
       duration: transcodeDuration,
@@ -99,9 +123,13 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // 4) Upload HLS outputs to R2 under assetKey/hls
     const uploadStart = Date.now();
+    // Obter o diretório relativo
     const relativeDir = path.relative(tmp, outDir);
+    // Uploadar o diretório de saída para o R2
     const uploadResult = await uploadDirectory(outDir, `${data.assetKey}/${relativeDir}`);
+    // Obter o tempo de fim da upload
     const uploadEnd = Date.now();
+    // Obter o tempo de duração da upload
     const uploadDuration = uploadEnd - uploadStart;
     
     // Calculate upload throughput
@@ -121,12 +149,18 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // 5) Thumbnail única para capa
     const thumbsDir = path.join(tmp, 'thumbs');
+    // Criar o diretório de saída
     await fs.mkdir(thumbsDir, { recursive: true });
     try {
+      // Criar o caminho do arquivo de saída
       const mainThumbPath = path.join(thumbsDir, '0001.jpg');
+      // Obter o segundo médio
       const midSecond = Math.max(1, Math.floor((info.durationSeconds || 2) / 2));
+      // Extrair a thumbnail
       await extractThumbnail(inputPath, mainThumbPath, midSecond, 1280);
+      // Obter o buffer da thumbnail
       const thumbBuf = await fs.readFile(mainThumbPath);
+      // Uploadar a thumbnail para o R2
       await putObject(`${data.assetKey}/thumbs/0001.jpg`, thumbBuf, 'image/jpeg');
     } catch (thumbError) {
       logger.warn({ thumbError }, 'Failed to generate thumbnail, continuing...');
@@ -142,16 +176,20 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
 
     // Callback to backend if configured
     if (process.env.BACKEND_API_URL) {
+      // Obter o número máximo de tentativas de callback
       const maxCallbackRetries = 10;
+      // Criar o callbackSuccess
       let callbackSuccess = false;
-      
-      // Normalize base so it contains exactly one "/api" - moved outside loop for rollback use
+    
+      // Normalizar a base para que contenha exatamente uma "/api"
       const base = process.env.BACKEND_API_URL
         .replace(/\/$/, '')
         .replace(/\/api\/api$/, '/api')
         .replace(/([^/])$/, '$1');
+      // Criar o ensuredApi
       const ensuredApi = base.endsWith('/api') ? base : `${base}/api`;
-      
+
+      // Criar o loop de tentativas
       for (let attempt = 1; attempt <= maxCallbackRetries && !callbackSuccess; attempt++) {
         try {
           const url = `${ensuredApi.replace(/\/$/, '')}/videos/transcode/callback`;
@@ -171,8 +209,11 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
           });
           
           logger.info({ videoId: result.videoId, attempt }, 'Callback to backend succeeded');
+          // Definir o callbackSuccess como true para sair do loop 
           callbackSuccess = true;
         } catch (cbErr) {
+          // Se o número de tentativas for igual ao número máximo de tentativas 
+          // e o callbackSuccess for false, então iniciar o rollback
           if (attempt === maxCallbackRetries) {
             logger.error({ 
               err: cbErr, 
@@ -275,61 +316,100 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   });
 }
 
+// Função que faz o upload de um diretório para o R2
+// Isso quer dzer que vamos usar o r2 para armazenar o vídeo transcodado
+// e as thumbnails
 async function uploadDirectory(localDir: string, destPrefix: string): Promise<{ totalBytes: number; fileCount: number }> {
+  // Obter os arquivos do diretório
   const entries = await fs.readdir(localDir, { withFileTypes: true });
 
+  // Inicializar o total de bytes
   let totalBytes = 0;
+  // Inicializar o total de arquivos
   let fileCount = 0;
 
   // Split into directories and files to preserve structure
   const directories: Array<{ full: string; key: string }> = [];
+  
+  // Inicializar o array de arquivos
   const files: Array<{ full: string; key: string; name: string }> = [];
 
+  // Loop pelos arquivos do diretório
   for (const e of entries) {
+    // Criar o caminho completo do arquivo
     const full = path.join(localDir, e.name);
+    // Criar a chave do arquivo
     const key = `${destPrefix}/${e.name}`.replace(/\\/g, '/');
+    // Se o arquivo for um diretório, adicionar ao array de diretórios
     if (e.isDirectory()) {
+      // Adicionar ao array de diretórios
       directories.push({ full, key });
     } else {
+      // Adicionar ao array de arquivos
       files.push({ full, key, name: e.name });
     }
   }
-
-  // Recurse into subdirectories first (sequential) to ensure hierarchy exists
+  // Subir os diretórios primeiro (sequencial) para garantir a hierarquia
+  // existe
   for (const dir of directories) {
+    // Subir o diretório
     const sub = await uploadDirectory(dir.full, dir.key);
+    // Adicionar ao total de bytes
     totalBytes += sub.totalBytes;
+    // Adicionar ao total de arquivos
     fileCount += sub.fileCount;
   }
 
-  // Upload files with limited concurrency
+  // Upload arquivos com concorrência limitada
+  // Inicializar o máximo de concorrência
   const maxConcurrent = Math.max(1, Math.min(64, parseInt(process.env.MAX_CONCURRENT_UPLOADS || '12', 10)));
+  // Inicializar o índice
   let nextIndex = 0;
 
+  // Função que faz o upload de um arquivo
   const uploadWorker = async () => {
+    // O loop vai continuar até que o índice seja maior que o total de arquivos
     // eslint-disable-next-line no-constant-condition
     while (true) {
+      // Obter o índice atual
       const current = nextIndex++;
+      // Se o índice atual for maior que o total de arquivos, sair do loop
       if (current >= files.length) break;
-
+      // Obter o arquivo atual
       const f = files[current];
+      // Obter o buffer do arquivo
       const buf = await fs.readFile(f.full);
+      // Obter o tipo de conteúdo do arquivo
       const contentType = mime.getType(f.name) || undefined;
+      // Uploadar o arquivo
       await putObject(f.key, buf, contentType);
-
+      // Adicionar ao total de bytes
       totalBytes += buf.length;
+      // Adicionar ao total de arquivos
       fileCount += 1;
     }
   };
 
+  // Inicializar o array de workers
   const workers: Promise<void>[] = [];
+  // Obter o número de workers
   const workerCount = Math.min(maxConcurrent, files.length);
+  // Loop pelos workers
   for (let i = 0; i < workerCount; i++) workers.push(uploadWorker());
+  // Se o número de workers for maior que 0, esperar todos os workers
   if (workers.length > 0) {
+    // Aguardar todos os workers
     await Promise.all(workers);
   }
-
+  // Retornar o total de bytes e o total de arquivos
   return { totalBytes, fileCount };
 }
 
-
+// Em resumo esse arquivo é responsável por:
+// 1) Download do vídeo original
+// 2) Probe do vídeo original que é usado para ajustar os parâmetros de transcodificação (fps, audio channels, etc)
+// 3) Transcodificação do vídeo para HLS
+// 4) Upload do vídeo transcodado para o R2
+// 5) Upload da thumbnail para o R2
+// 6) Callback para o backend
+// 7) Rollback em caso de falha
