@@ -362,7 +362,7 @@ async function uploadDirectory(localDir: string, destPrefix: string): Promise<{ 
 
   // Upload arquivos com concorrência limitada
   // Inicializar o máximo de concorrência
-  const maxConcurrent = Math.max(1, Math.min(64, parseInt(process.env.MAX_CONCURRENT_UPLOADS || '12', 10)));
+  const maxConcurrent = Math.max(1, Math.min(64, parseInt(process.env.MAX_CONCURRENT_UPLOADS || '64', 10)));
   // Inicializar o índice
   let nextIndex = 0;
 

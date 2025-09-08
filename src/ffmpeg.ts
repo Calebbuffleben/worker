@@ -97,40 +97,28 @@ export async function transcodeToHls(
     codecs: string;
   }> = [];
 
-  // Process each variant sequentially to avoid resource conflicts
+  // Process variants in parallel
   const audioCodecRfc6381 = 'mp4a.40.2'; // AAC-LC
   // Obter a taxa de quadros
   const fps = Math.max(1, Math.round((options.videoFps || 24)));
-
+  const promises: Array<Promise<void>> = [];
   for (let i = 0; i < options.variants.length; i++) {
-    // Obter a variante atual
     const variant = options.variants[i];
-    // Criar o nome da playlist da variante
     const playlistName = `variant_${variant.height}p.m3u8`;
-    // Criar o caminho da playlist da variante
     const playlistPath = path.join(destinationDir, playlistName);
-    // Criar o prefixo do segmento da variante
     const segmentPrefix = `segment_${variant.height}p_%03d.ts`;
-    
-    // Obter a taxa de bitrate do vídeo
     const vBitrate = `${variant.videoBitrateKbps}k`;
     const aBitrate = `${variant.audioBitrateKbps}k`;
-    
-    // Calculate total bandwidth (video + audio + overhead ~10%)
     const totalBandwidth = Math.round((variant.videoBitrateKbps + variant.audioBitrateKbps) * 1100);
 
     logger.info(`Transcoding variant ${i + 1}/${options.variants.length}: ${variant.width}x${variant.height} @ ${vBitrate}`);
 
-    await new Promise<void>((resolve, reject) => {
-      // Choose H.264 level based on resolution and fps
-      // 720p@<=30fps -> 4.0, 720p@>30fps -> 4.1
+    const p = new Promise<void>((resolve, reject) => {
       const needsHighFps = variant.height >= 720 && fps > 30;
       const h264Level = needsHighFps ? '4.1' : '4.0';
-      // Obter o codec de vídeo
       const videoCodecRfc6381 = needsHighFps ? 'avc1.4d4029' : 'avc1.4d4028';
       const gopSize = Math.max(24, Math.round(fps * options.segmentSeconds));
 
-      // Criar o comando de transcodificação
       let command = ffmpeg(inputFile)
         .videoCodec('libx264')
         .videoFilters(`scale=${variant.width}:${variant.height}`);
@@ -142,13 +130,10 @@ export async function transcodeToHls(
       command
         .outputOptions((() => {
           const opts: string[] = [];
-          // Performance and stability
           opts.push('-threads 0');
           opts.push('-filter_threads 0');
           opts.push('-sws_flags fast_bilinear');
           opts.push('-max_muxing_queue_size 1024');
-          
-          // Encoding
           opts.push(`-preset ${options.preset}`);
           if (options.crf != null) {
             opts.push(`-crf ${options.crf}`);
@@ -161,7 +146,6 @@ export async function transcodeToHls(
           opts.push(`-g ${gopSize}`);
           opts.push(`-keyint_min ${gopSize}`);
           opts.push('-pix_fmt yuv420p');
-          // Stream mapping
           opts.push('-map 0:v:0');
           if (options.includeAudio) {
             opts.push('-map 0:a:0?');
@@ -176,7 +160,6 @@ export async function transcodeToHls(
           opts.push('-map_metadata -1');
           opts.push('-map_chapters -1');
           opts.push(`-force_key_frames expr:gte(t,n_forced*${options.segmentSeconds})`);
-          // HLS options
           opts.push(`-hls_time ${options.segmentSeconds}`);
           opts.push('-hls_playlist_type vod');
           opts.push('-hls_flags independent_segments');
@@ -197,28 +180,32 @@ export async function transcodeToHls(
             variant: `${variant.width}x${variant.height}`,
             inputFile,
             outputPath: playlistPath,
-            command: command._getArguments?.() || 'unknown'
+            command: (command as unknown as { _getArguments?: () => unknown })._getArguments?.() || 'unknown'
           }, `ffmpeg error variant ${variant.height}p`);
           reject(err);
         })
         .on('end', () => {
           logger.info(`ffmpeg finished variant ${variant.height}p`);
+          variantPlaylists.push({
+            width: variant.width,
+            height: variant.height,
+            bandwidth: totalBandwidth,
+            playlistPath: playlistName,
+            codecs: options.includeAudio
+              ? `${needsHighFps ? 'avc1.4d4029' : 'avc1.4d4028'},${audioCodecRfc6381}`
+              : `${needsHighFps ? 'avc1.4d4029' : 'avc1.4d4028'}`,
+          });
           resolve();
         });
 
       command.run();
     });
 
-    // Adicionar a playlist de variante ao array de playlists
-    variantPlaylists.push({
-      width: variant.width,
-      height: variant.height,
-      bandwidth: totalBandwidth,
-      playlistPath: playlistName,
-      codecs: options.includeAudio
-        ? `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'},${audioCodecRfc6381}`
-        : `${(variant.height >= 720 && fps > 30) ? 'avc1.4d4029' : 'avc1.4d4028'}`,
-    });
+    promises.push(p);
+  }
+
+  if (promises.length > 0) {
+    await Promise.all(promises);
   }
 
   // Generate master playlist
