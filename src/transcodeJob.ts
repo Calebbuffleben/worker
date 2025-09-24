@@ -15,8 +15,8 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
   // Obter o tempo de início do job
   const startTime = Date.now();
   
-  // Ajustar segmentSeconds baseado na duração do vídeo
-  let segmentSeconds = data.segmentSeconds ?? 6;
+  // Novo padrão para HLS híbrido: usar 20s como tamanho base (após 30s iniciais)
+  let segmentSeconds = data.segmentSeconds ?? 20;
   
   // Obter os valores dos parâmetros de transcodificação
   const crf = data.crf ?? 21;
@@ -77,14 +77,12 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
     const info = await probe(inputPath);
     logger.info({ info }, 'ffprobe info');
 
-    // Ajustar segmentSeconds baseado na duração real do vídeo
-    if (info.durationSeconds && info.durationSeconds > 1800) { // > 30 minutos
-      segmentSeconds = 2;
-      logger.info(`Video duration: ${info.durationSeconds}s, using ${segmentSeconds}s segments for very long video`);
-    } else if (info.durationSeconds && info.durationSeconds > 600) { // > 10 minutos
-      segmentSeconds = 4;
-      logger.info(`Video duration: ${info.durationSeconds}s, using ${segmentSeconds}s segments`);
-    }
+    // Estratégia híbrida: primeiros 30s em 3x10s, depois 20s
+    const hybridSegmentation = {
+      initialSegmentSeconds: 10,
+      initialSegmentCount: 3,
+      subsequentSegmentSeconds: 20,
+    } as const;
 
     // 3) Transcode to HLS (MVP: single variant)
     const transcodeStart = Date.now();
@@ -98,13 +96,15 @@ export async function handleTranscodeJob(job: Job<TranscodeJobData>): Promise<Tr
         videoBitrateKbps: x.videoBitrateKbps,
         audioBitrateKbps: x.audioBitrateKbps ?? (data.audioBitrateKbps ?? 128),
       })),
-      segmentSeconds,
+      segmentSeconds, // usado para GOP base e fallback
       preset,
       crf,
       audioCodec: 'aac',
       videoFps: info.fps,
       includeAudio: info.hasAudio === true,
       audioChannels: info.audioChannels ?? 2,
+      durationSeconds: info.durationSeconds,
+      hybridSegmentation,
     });
     // Obter o tempo de fim da transcodificação
     const transcodeEnd = Date.now();
